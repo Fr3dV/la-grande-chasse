@@ -20,4 +20,5 @@ Jeu de chasse en 3D qui tourne dans le navigateur. Tout tient dans `index.html` 
 
 - La partie est sauvegardée dans le navigateur du joueur (localStorage), propre à chaque domaine : une partie commencée ailleurs ne suit pas.
 - Seules les polices viennent de Google Fonts ; sans internet, le jeu marche avec des polices de secours.
+- Classement partagé de gamzu.fr (`https://gamzu.fr/scores.js`) : le total d’argent gagné est envoyé à chaque vente au comptoir, si le joueur a choisi un pseudo. Le top 10 s’affiche sur l’écran titre et en pause.
 - Le jeu se joue au clavier et à la souris, sur ordinateur.

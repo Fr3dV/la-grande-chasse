@@ -242,6 +242,7 @@ table.ventes tfoot td{border:0;font-size:19px;padding-top:12px}
     <div class="astuces">
       <b>Conseils de chasseur.</b> Les animaux t’entendent quand tu cours : approche-toi en marchant. Un tir dans la tête fait deux fois plus de dégâts. Le sanglier blessé et l’ours attaquent ! Le village, avec son drapeau rouge, est une zone sûre. On raconte qu’un élan doré vit quelque part dans la forêt…
     </div>
+    <div id="gzScores"></div>
     <p id="t-sauve" class="note"></p>
     <button class="gros" id="b-jouer">Jouer</button>
     <p class="note" id="t-tactile" hidden>Ce jeu se joue sur ordinateur, avec un clavier et une souris.</p>
@@ -252,6 +253,7 @@ table.ventes tfoot td{border:0;font-size:19px;padding-top:12px}
   <div class="carte etroite">
     <h2>Pause</h2>
     <p id="pause-stats"></p>
+    <div id="gzScoresP"></div>
     <h3>Saison</h3>
     <div class="choix" id="choix-saison"></div>
     <label class="case"><input type="checkbox" id="saison-auto"> Les saisons changent toutes seules, petit à petit</label>
@@ -375,6 +377,14 @@ function sauver() { try { localStorage.setItem(CLE, JSON.stringify(S)); } catch 
 let S = chargerPartie();
 const partieExistante = !!S;
 if (!S) S = etatInitial();
+
+/* ================= Classement gamzu.fr (gamzu.fr/scores.js, optionnel) =================
+   Score : total d’argent gagné (S.gains) ; détail : nombre d’animaux vendus.
+   Envoi à chaque vente au comptoir ; top 10 sur l’écran titre et en pause. */
+function gzDetail() { return pluriel(S.tableau, 'animal vendu', 'animaux vendus'); }
+function gzEnvoi() { if (window.Gamzu && Gamzu.nom() && S.gains >= 1) Gamzu.envoyer('lgc', Math.floor(S.gains), null, gzDetail()).catch(() => {}); }
+function gzPanneau(id) { if (window.Gamzu) Gamzu.panneau($(id), 'lgc', Math.floor(S.gains), gzDetail()); }
+window.addEventListener('load', () => gzPanneau('gzScores'));
 
 /* ================= Son (Web Audio) ================= */
 let AC = null, bruitBuf = null;
@@ -4127,6 +4137,7 @@ function action(act, id) {
     S.vendus = S.vendus || {};
     S.butin.forEach((t) => { const k = String(t).split(':')[0]; S.vendus[k] = (S.vendus[k] || 0) + 1; });
     S.argent += total; S.gains += total; S.tableau += n; S.butin = [];
+    gzEnvoi();
     majTrophees();
     dernierGain = total;
     sonCaisse();
@@ -4208,6 +4219,7 @@ function ouvrirPause() {
   $('b-reset').textContent = 'Recommencer une nouvelle partie';
   $('b-reset').dataset.confirme = '';
   majChoixPause();
+  gzPanneau('gzScoresP');
   $('pause').hidden = false;
 }
 function reprendre() { $('pause').hidden = true; mode = 'jeu'; verrouiller(true); }
@@ -4660,6 +4672,7 @@ boucle();
 window.__jeu = { get S() { return S; }, P, animaux, tirer, get mode() { return mode; } };
 })();
 </script>
+<script src="https://gamzu.fr/scores.js"></script>
 <script src="https://gamzu.fr/gamzu-menu.js"></script>
 </body>
 </html>
