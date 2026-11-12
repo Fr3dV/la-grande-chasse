@@ -90,6 +90,8 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--fond);color:var(
 #viseur.touche i{background:#ffd23f}
 #viseur.tue{transform:translate(-50%,-50%) rotate(45deg) scale(1.3)}
 #viseur.tue i{background:var(--danger)}
+#visee-info{position:absolute;left:50%;top:calc(50% + 30px);transform:translateX(-50%);font-size:13px;font-weight:800;color:#fff;text-shadow:0 0 3px #000,0 1px 2px #000;white-space:nowrap;letter-spacing:.5px}
+#h-vent-f{display:inline-block;vertical-align:-2px;color:#7cc4ff}
 #barre{position:absolute;left:50%;bottom:calc(14px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);display:flex;gap:5px}
 .slot{position:relative;width:62px;height:44px;background:var(--hud-fond);border:2px solid rgba(255,255,255,.16);border-radius:8px;display:flex;align-items:center;justify-content:center}
 .slot img{max-width:56px;max-height:34px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))}
@@ -197,6 +199,7 @@ table.ventes tfoot td{border:0;font-size:19px;padding-top:12px}
     <small id="h-tableau">0 animal vendu</small>
     <small id="h-saison"></small>
     <small id="h-heure"></small>
+    <small id="h-vent-l"><svg id="h-vent-f" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 L14 14 L8 10.5 L2 14 Z" fill="currentColor"/></svg> <span id="h-vent"></span></small>
   </div>
   <div id="hud-bg" class="hud-box">
     <div class="etiq"><span>Vie</span><span id="h-vie-n">100</span></div>
@@ -213,6 +216,7 @@ table.ventes tfoot td{border:0;font-size:19px;padding-top:12px}
   <canvas id="carte-mini" width="150" height="150"></canvas>
   <div id="vdir" class="hud-box" hidden><svg id="vd-fleche" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 L14 14 L8 10.5 L2 14 Z" fill="currentColor"/></svg> <span id="vd-txt"></span></div>
   <div id="viseur"><i></i><i></i><i></i><i></i></div>
+  <div id="visee-info"></div>
   <div id="prompt" hidden></div>
   <div id="reprendre-hint" hidden>Clique dans le jeu pour reprendre la main</div>
   <div id="toasts"></div>
@@ -230,7 +234,7 @@ table.ventes tfoot td{border:0;font-size:19px;padding-top:12px}
       <div><kbd>Z Q S D</kbd><span>se déplacer (ou W A S D)</span></div>
       <div><kbd>Souris</kbd><span>regarder et viser</span></div>
       <div><kbd>Clic gauche</kbd><span>tirer</span></div>
-      <div><kbd>Clic droit</kbd><span>maintenir pour zoomer</span></div>
+      <div><kbd>Clic droit</kbd><span>maintenir pour viser (zoom, distance)</span></div>
       <div><kbd>Maj</kbd><span>courir</span></div>
       <div><kbd>Espace</kbd><span>sauter</span></div>
       <div><kbd>R</kbd><span>recharger</span></div>
@@ -313,6 +317,10 @@ const ARMES = {
   plasma:   { nom: 'Blaster plasma', prix: 2600, invente: true, type: 'projectile', proj: 'plasma', vitesse: 70, gravite: 0, degats: 34, eclabousse: 2.5, plombs: 1, dispersion: 0.006, portee: 200, cadence: 0.13, energie: 6, auto: true, zoom: 1.5, recul: 0.25, bruit: 50, desc: 'Boules d’énergie en rafale qui explosent en touchant : elles blessent tout autour.' },
   eclair:   { nom: 'Canon à éclairs', prix: 3500, invente: true, type: 'eclair', degats: 95, chaine: 3, plombs: 1, dispersion: 0, portee: 140, cadence: 1.1, energie: 45, zoom: 1.3, recul: 1, bruit: 90, desc: 'La foudre frappe un animal puis saute sur 3 autres animaux proches. Le plus puissant de tous !' },
 };
+/* Balistique des armes à feu : vitesse de la balle (m/s) et distance de réglage de la visée (m).
+   En deçà du réglage la balle arrive pile au viseur ; au-delà elle retombe peu à peu. */
+const BALISTIQUE = { pistolet: { v: 260, zero: 25 }, fusil: { v: 300, zero: 25 }, carabine: { v: 400, zero: 80 }, lunette: { v: 480, zero: 100 } };
+const DERIVE_BALLE = 0.6, DERIVE_TRAIT = 0.25; // sensibilité au vent (balles, flèches et carreaux)
 const ORDRE_ARMES = ['pistolet', 'arc', 'fusil', 'arbalete', 'carabine', 'filet', 'lunette', 'givre', 'laser', 'plasma', 'eclair'];
 const especeButin = (t) => ESPECES[String(t).split(':')[0]];
 const prixButin = (t) => Math.round(especeButin(t).prix * (String(t).endsWith(':vivant') ? 1.5 : 1));
@@ -426,7 +434,11 @@ function bip(freq, dur, type = 'sine', vol = 0.2, delai = 0, freqFin) {
   o.start(t); o.stop(t + dur + 0.05);
 }
 const SON_TIR = { pistolet: [3200, 0.25, 0.7], fusil: [1300, 0.6, 1], carabine: [2400, 0.4, 0.85], lunette: [1700, 0.75, 1] };
-function sonTir(id) { const [f, d, v] = SON_TIR[id]; bruit(d, f, v); bip(150, 0.18, 'sine', 0.7, 0, 40); }
+function sonTir(id) {
+  const [f, d, v] = SON_TIR[id]; bruit(d, f, v); bip(150, 0.18, 'sine', 0.7, 0, 40);
+  // la détonation roule sur les collines : deux échos de plus en plus sourds
+  bruit(d * 2.4, f * 0.3, v * 0.2, 0.3); bruit(d * 3.2, f * 0.17, v * 0.11, 0.78);
+}
 const sonTouche = (tue) => bip(tue ? 520 : 1250, tue ? 0.18 : 0.06, 'square', 0.1);
 const sonClic = () => bip(320, 0.03, 'square', 0.08);
 const sonRecharge = () => { bip(520, 0.05, 'square', 0.07); bip(760, 0.05, 'square', 0.07, 0.25); };
@@ -1172,6 +1184,48 @@ const oiseaux = [];
     g.scale.setScalar(1.6);
     scene.add(g);
     oiseaux.push({ g, ailes, cx: rnd(-120, 120), cz: rnd(-120, 120), r: rnd(40, 110), y: rnd(42, 75), v: rnd(9, 14) * (Math.random() < 0.5 ? -1 : 1), ph: rnd(0, 6.28) });
+  }
+}
+
+/* ----- Envol : une volée de petits oiseaux quitte les arbres quand un coup de feu claque ----- */
+const envolees = [];
+let tEnvol = 0;
+function envol() {
+  if (tEnvol > 0 || P.interieur || NUIT.jour < 0.5 || TEMPETE.k > 0.3 || auVillage()) return;
+  tEnvol = 10;
+  if (!envolees.length) {
+    const mE = mat(0x3a3028), gC = new THREE.BoxGeometry(0.1, 0.07, 0.26), gA = new THREE.BoxGeometry(0.34, 0.015, 0.14);
+    gA.translate(0.17, 0, 0);
+    for (let k = 0; k < 6; k++) {
+      const g = new THREE.Group(); g.add(new THREE.Mesh(gC, mE));
+      const ailes = [1, -1].map((c) => { const a = new THREE.Mesh(gA, mE); a.scale.x = c; g.add(a); return a; });
+      g.visible = false; scene.add(g);
+      envolees.push({ g, ailes, v: new THREE.Vector3(), t: 0, ph: k * 1.1 });
+    }
+  }
+  // elles partent d’un bosquet devant le joueur et s’éloignent de lui
+  const cap = P.yaw + rnd(-0.7, 0.7), dist = rnd(11, 22);
+  const bx0 = P.x - Math.sin(cap) * dist, bz0 = P.z - Math.cos(cap) * dist, by0 = sol(bx0, bz0);
+  for (const e of envolees) {
+    e.g.position.set(bx0 + rnd(-2.5, 2.5), by0 + rnd(4, 8), bz0 + rnd(-2.5, 2.5));
+    const fuite = cap + rnd(-0.9, 0.9), vh = rnd(6, 9);
+    e.v.set(-Math.sin(fuite) * vh, rnd(2.5, 4.5), -Math.cos(fuite) * vh);
+    e.t = rnd(4, 5.5); e.g.visible = true;
+  }
+  for (let i = 0; i < 7; i++) bruit(0.035, 2800, 0.05, 0.05 + i * 0.065); // battements d’ailes
+  for (let i = 0; i < 3; i++) bip(rnd(3000, 3600), 0.05, 'sine', 0.025, 0.1 + i * 0.12, 2400);
+}
+function majEnvol(dt) {
+  if (tEnvol > 0) tEnvol -= dt;
+  for (const e of envolees) {
+    if (e.t <= 0) continue;
+    e.t -= dt;
+    if (e.t <= 0) { e.g.visible = false; continue; }
+    e.v.y += (1.2 - e.v.y) * Math.min(1, dt * 0.8);
+    e.g.position.addScaledVector(e.v, dt);
+    e.g.rotation.y = Math.atan2(e.v.x, e.v.z);
+    const bat = Math.sin(temps * 30 + e.ph) * 0.9;
+    e.ailes[0].rotation.z = bat; e.ailes[1].rotation.z = -bat;
   }
 }
 
@@ -2384,11 +2438,12 @@ function majSysteme(s, dt) {
   const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z, p = s.pos;
   const vy = (s.type === 'neige' ? 1.4 : s.type === 'feuilles' ? 1.1 : 0.7) * (1 + tk * 1.2);
   const derive = s.type === 'neige' ? 0.45 + tk * 1.5 : 1.3;
+  const pousse = 0.22 * VENT.force + tk * 15, px = VENT.ux * pousse, pz = VENT.uz * pousse; // emportées par le vent
   for (let i = 0; i < n; i++) {
     const k = i * 3;
     p[k + 1] -= vy * dt * (0.7 + (i % 7) * 0.08);
-    p[k] += (Math.sin(temps * 1.3 + s.ph[i]) * derive + 0.35 + tk * 16) * dt;
-    p[k + 2] += (Math.cos(temps * 1.1 + s.ph[i]) * derive * 0.4 + tk * 6) * dt;
+    p[k] += (Math.sin(temps * 1.3 + s.ph[i]) * derive + px) * dt;
+    p[k + 2] += (Math.cos(temps * 1.1 + s.ph[i]) * derive * 0.4 + pz) * dt;
     if (p[k + 1] < cy - 8) p[k + 1] += 30;
     if (p[k] - cx > 30) p[k] -= 60; else if (p[k] - cx < -30) p[k] += 60;
     if (p[k + 2] - cz > 30) p[k + 2] -= 60; else if (p[k + 2] - cz < -30) p[k + 2] += 60;
@@ -2436,7 +2491,7 @@ function melanger(force) {
   VEG.feuillesSol.setFraction(m('feuillesSol'));
   VEG.baies.setFraction(m('baies'));
   VEG.buissons.material.emissive.setRGB(0.4 * neige, 0.42 * neige, 0.45 * neige);
-  ETAT_SAISON.papillons = m('papillons');
+  ETAT_SAISON.papillons = m('papillons'); ETAT_SAISON.feuillesSol = m('feuillesSol');
   VEG.fougeres.setFraction(m('fougeres'));
   mixH(A.fougere, B.fougere, f, VEG.fougeres.material.color);
   VEG.champis.forEach((c) => c.setFraction(m('champis')));
@@ -2490,7 +2545,7 @@ function appliquerQualite(q) {
   majChoixPause();
 }
 function majChoixPause() {
-  $('choix-saison').innerHTML = ORDRE_SAISONS.map((k) => `<button data-saison="${k}" class="${S.saison === k ? 'actif' : ''}">${SAISONS[k].emoji} ${SAISONS[k].nom}</button>`).join('') + (ETAT_SAISON.neige > 0.75 && !TEMPETE.active ? '<button data-tempete="1">🌨️ Lancer une tempête</button>' : '') + '<button data-heure="9">☀️ Matin</button><button data-heure="19.3">🌅 Soir</button><button data-heure="23">🌙 Nuit</button>';
+  $('choix-saison').innerHTML = ORDRE_SAISONS.map((k) => `<button data-saison="${k}" class="${S.saison === k ? 'actif' : ''}">${SAISONS[k].emoji} ${SAISONS[k].nom}</button>`).join('') + (ETAT_SAISON.neige > 0.75 && !(TEMPETE && TEMPETE.active) ? '<button data-tempete="1">🌨️ Lancer une tempête</button>' : '') + '<button data-heure="9">☀️ Matin</button><button data-heure="19.3">🌅 Soir</button><button data-heure="23">🌙 Nuit</button>';
   $('choix-qualite').innerHTML = ORDRE_QUALITES.map((k) => `<button data-qualite="${k}" class="${S.qualite === k ? 'actif' : ''}">${QUALITES[k].nom}</button>`).join('');
   $('saison-auto').checked = !!S.saisonAuto;
 }
@@ -2507,6 +2562,22 @@ $('choix-qualite').addEventListener('click', (e) => {
 $('saison-auto').addEventListener('change', (e) => { S.saisonAuto = e.target.checked; sauver(); });
 appliquerQualite(S.qualite);
 
+
+/* ----- Vent : direction et force changent lentement. Il porte l’odeur du joueur vers les animaux,
+   fait dériver balles et flèches, pousse la fumée, les nuages, la neige et les feuilles. -----
+   dir : cap vers lequel le vent souffle (x = sin, z = cos) ; force en m/s. */
+var VENT = { dir: Math.PI / 2, cible: Math.PI / 2, force: 2.5, fCible: 2.5, t: rnd(50, 90), ux: 1, uz: 0, rafale: 0 };
+function majVent(dt) {
+  if (mode === 'jeu') {
+    VENT.t -= dt;
+    if (VENT.t <= 0) { VENT.t = rnd(60, 130); VENT.cible = VENT.dir + rnd(-1.3, 1.3); VENT.fCible = rnd(0.8, 5); }
+  }
+  VENT.dir += ecartAngle(VENT.dir, VENT.cible) * Math.min(1, dt * 0.05);
+  VENT.rafale = Math.sin(temps * 0.37) * 0.5 + Math.sin(temps * 0.93 + 1.7) * 0.3;
+  const visee = Math.max(0.3, (VENT.fCible + TEMPETE.k * 6) * (1 + VENT.rafale * 0.25));
+  VENT.force += (visee - VENT.force) * Math.min(1, dt * 0.5);
+  VENT.ux = Math.sin(VENT.dir); VENT.uz = Math.cos(VENT.dir);
+}
 
 /* ----- Météo d’hiver : tempêtes de neige et neige qui s’accumule ----- */
 var TEMPETE = { k: 0, active: false, t: 0, prochaine: rnd(45, 100) };
@@ -2545,16 +2616,19 @@ function lancerTempete() {
 let ventSon = null;
 function majVentSon() {
   if (!AC || !bruitBuf) return;
-  const k = mode === 'jeu' && !P.interieur ? TEMPETE.k : TEMPETE.k * 0.3;
+  const dehors = mode === 'jeu' && !P.interieur;
+  const k = dehors ? TEMPETE.k : TEMPETE.k * 0.3;
+  // hors tempête : souffle léger dans les arbres, qui suit la force du vent et ses rafales
+  const vol = k * 0.28 + (dehors ? 0.011 * VENT.force * (1 + VENT.rafale * 0.6) : 0);
   if (!ventSon) {
-    if (k <= 0.01) return;
+    if (vol <= 0.004) return;
     const src = AC.createBufferSource(); src.buffer = bruitBuf; src.loop = true;
     const f = AC.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 500; f.Q.value = 0.7;
     const g = AC.createGain(); g.gain.value = 0;
     src.connect(f); f.connect(g); g.connect(AC.destination); src.start();
     ventSon = { f, g };
   }
-  ventSon.g.gain.setTargetAtTime(k * 0.28, AC.currentTime, 0.4);
+  ventSon.g.gain.setTargetAtTime(vol, AC.currentTime, 0.4);
   ventSon.f.frequency.setTargetAtTime(380 + Math.sin(temps * 0.7) * 160 + Math.sin(temps * 2.3) * 60 + k * 220, AC.currentTime, 0.3);
 }
 var meteoAvant = false;
@@ -2574,6 +2648,7 @@ function majMeteo(dt) {
   else profNeige = Math.max(cibleN, profNeige - dt * 0.012);
   U_PROF.value = profNeige;
   couche.visible = profNeige > 0.02;
+  mixH(0x2b2218, 0x66758c, ETAT_SAISON.neige, traces.me.material.color); // empreintes : terre foncée, ou creux bleutés dans la neige
   appliquerAmbiance();
   majVentSon();
 }
@@ -2584,7 +2659,7 @@ const DUREE_JOUR = 480;
 const C_COUCHANT = new THREE.Color(0xe8a064), C_COUCHANT_HAUT = new THREE.Color(0x5a6aa8), C_NUIT_BRUME = new THREE.Color(0x0d1626), C_NUIT_HAUT = new THREE.Color(0x040916);
 const C_NUIT_BAS = new THREE.Color(0x13203a), C_LUNE = new THREE.Color(0x9ab4ff), C_CHAUD = new THREE.Color(0xffb27a), C_TEMP_NUIT = new THREE.Color(0x2a3038);
 const C_HEMI_NUIT = new THREE.Color(0x24345a), C_SOL_NUIT = new THREE.Color(0x10140e);
-const tmpC = new THREE.Color(), tmpC2 = new THREE.Color();
+const tmpC = new THREE.Color(), tmpC2 = new THREE.Color(), C_BRUME_MATIN = new THREE.Color(0xe3e9e6);
 const DIR_LUNE = new THREE.Vector3();
 const voieLactee = (() => {
   const n = 1400, pos = new Float32Array(n * 3);
@@ -2677,12 +2752,14 @@ function majNuit(dt) {
 function appliquerAmbiance() {
   const b = ETAT_SAISON.base; if (!b) return;
   const n = NUIT.n, c = NUIT.c, k = TEMPETE.k, j = NUIT.jour;
-  scene.fog.near = b.near + (5 - b.near) * k;
-  scene.fog.far = (b.far + (65 - b.far) * k) * (1 - 0.35 * n);
+  // brume matinale : elle se lève avant l’aube et se dissipe dans la matinée
+  const bm = lisse(4.6, 6, S.heure) * (1 - lisse(8, 9.8, S.heure)) * (1 - k);
+  scene.fog.near = (b.near + (5 - b.near) * k) * (1 - 0.8 * bm);
+  scene.fog.far = (b.far + (65 - b.far) * k) * (1 - 0.35 * n) * (1 - 0.42 * bm);
   tmpC2.copy(GRIS_TEMPETE).lerp(C_TEMP_NUIT, n);
-  scene.fog.color.copy(b.brume).lerp(C_COUCHANT, c * 0.4).lerp(C_NUIT_BRUME, n * 0.94).lerp(tmpC2, k); scene.background.copy(scene.fog.color);
+  scene.fog.color.copy(b.brume).lerp(C_COUCHANT, c * 0.4).lerp(C_NUIT_BRUME, n * 0.94).lerp(tmpC.copy(C_BRUME_MATIN).multiplyScalar(1 - 0.8 * n), bm * 0.5).lerp(tmpC2, k); scene.background.copy(scene.fog.color);
   ciel.material.uniforms.haut.value.copy(b.haut).lerp(C_COUCHANT_HAUT, c * 0.5).lerp(C_NUIT_HAUT, n).lerp(tmpC.copy(GRIS_CIEL).lerp(C_TEMP_NUIT, n), k);
-  ciel.material.uniforms.bas.value.copy(b.bas).lerp(C_COUCHANT, c * 0.75).lerp(C_NUIT_BAS, n).lerp(tmpC2, k);
+  ciel.material.uniforms.bas.value.copy(b.bas).lerp(C_COUCHANT, c * 0.75).lerp(C_NUIT_BAS, n).lerp(tmpC.copy(C_BRUME_MATIN).multiplyScalar(1 - 0.8 * n), bm * 0.5).lerp(tmpC2, k);
   if (j > 0.35) { soleil.color.copy(b.soleilC).lerp(C_CHAUD, c * 0.7); soleil.intensity = b.soleil * j * (1 - 0.55 * k); }
   else { soleil.color.copy(C_LUNE); soleil.intensity = 0.3 * n * (1 - 0.6 * k); }
   hemi.intensity = 0.72 * (1 - 0.7 * n);
@@ -2693,6 +2770,41 @@ function appliquerAmbiance() {
   for (const nu of nuages) nu.visible = vis;
   VEG.nuageMat.color.setScalar(1 - 0.8 * n); VEG.nuageMat.emissive.copy(b.nuageE).multiplyScalar(1 - 0.85 * n);
   M_V.lanterne.emissiveIntensity = 1 + 1.6 * n; M_V.vitre.emissiveIntensity = 1 + 1.4 * n;
+}
+
+/* ----- Empreintes : les animaux (et le joueur dans la neige) laissent des traces qu’on peut suivre.
+   Un seul maillage instancié (un seul appel de dessin), les plus vieilles traces sont remplacées. ----- */
+const N_TRACES = 900;
+const traces = (() => {
+  const g = new THREE.CircleGeometry(1, 8); g.rotateX(-Math.PI / 2);
+  const cong = new THREE.InstancedBufferAttribute(new Float32Array(N_TRACES), 1); cong.setUsage(THREE.DynamicDrawUsage);
+  g.setAttribute('aCong', cong);
+  const m = new THREE.MeshBasicMaterial({ color: 0x2b2218, transparent: true, opacity: 0.5, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+  // la trace reste posée sur la neige quelle que soit son épaisseur
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uProf = U_PROF;
+    sh.vertexShader = 'uniform float uProf;\nattribute float aCong;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n transformed.y += uProf * aCong;');
+  };
+  const me = new THREE.InstancedMesh(g, m, N_TRACES);
+  me.instanceMatrix.setUsage(THREE.DynamicDrawUsage); me.frustumCulled = false;
+  m4.makeScale(0, 0, 0); for (let i = 0; i < N_TRACES; i++) me.setMatrixAt(i, m4);
+  scene.add(me);
+  return { me, cong, i: 0 };
+})();
+const qTrace = new THREE.Quaternion(), nTrace = new THREE.Vector3();
+function poserTrace(x, z, cap, larg, long) {
+  const y = sol(x, z);
+  if (presDuLac(x, z) && y < LAC.niveau + 0.15) return;
+  const gx = (sol(x + 1, z) - sol(x - 1, z)) / 2, gz = (sol(x, z + 1) - sol(x, z - 1)) / 2;
+  nTrace.set(-gx, 1, -gz).normalize();
+  qTrace.setFromUnitVectors(UP, nTrace).multiply(qt.setFromAxisAngle(UP, cap)); // couchée sur la pente, tournée dans le sens de la marche
+  m4.compose(vp.set(x, y + 0.035, z), qTrace, vs.set(larg, 1, long));
+  const i = traces.i; traces.i = (i + 1) % N_TRACES;
+  traces.me.setMatrixAt(i, m4); traces.me.instanceMatrix.needsUpdate = true;
+  // même relief de congères que la couche de neige
+  let c = 0.8 + 0.22 * Math.sin(x * 0.09 + z * 0.05) * Math.cos(z * 0.11 - x * 0.03) + 0.12 * Math.sin(x * 0.31 + z * 0.23);
+  c *= 1 - lisse(0.7, 1.2, Math.hypot(gx, gz)) * 0.75;
+  traces.cong.array[i] = Math.max(0.15, c); traces.cong.needsUpdate = true;
 }
 
 /* ================= Animaux ================= */
@@ -2944,7 +3056,7 @@ function creerAnimal(type, x, z, variante) {
   const a = Object.assign(construireAnimal(type, variante), {
     type, sp, x, z, dir: rnd(0, Math.PI * 2), yaw: 0, vit: 0, etat: 'errer', t: rnd(0, 3),
     pv: sp.pv, flash: 0, atk: 0, marche: 0, tMort: 0, chute: 0, marqueur: null, alerte: false,
-    chef: null, suiveurs: 0, dresse: 0, aguets: false,
+    chef: null, suiveurs: 0, dresse: 0, aguets: false, dTrace: 0, cTrace: 1, sursaut: 0,
   });
   a.yaw = a.dir;
   a.g.traverse((m) => { if (m.isMesh) { m.userData.animal = a; m.castShadow = true; } });
@@ -3082,16 +3194,39 @@ function majLac(dt) {
     }
   }
 }
-let tChant = 2, tCrapaud = 4;
+let tChant = 2, tCrapaud = 4, tBrame = 25;
+function brame() {
+  // brame du cerf, au loin : un long râle grave qui monte puis retombe
+  const ac = audio(); if (!ac) return;
+  const t = ac.currentTime, o = ac.createOscillator(), f = ac.createBiquadFilter(), g = ac.createGain();
+  o.type = 'sawtooth'; o.frequency.setValueAtTime(95, t); o.frequency.linearRampToValueAtTime(150, t + 0.5); o.frequency.linearRampToValueAtTime(135, t + 1.3); o.frequency.linearRampToValueAtTime(85, t + 1.9);
+  f.type = 'lowpass'; f.frequency.value = 520;
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.05, t + 0.35); g.gain.setValueAtTime(0.05, t + 1.3); g.gain.exponentialRampToValueAtTime(0.0001, t + 2);
+  o.connect(f); f.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + 2.1);
+}
 function ambiance(dt) {
   if (mode !== 'jeu') return;
+  if (P.interieur) return; // dans les boutiques, on n’entend plus la forêt
+  const nuit = NUIT.n > 0.6, hiver = ETAT_SAISON.neige >= 0.5;
   tChant -= dt;
   if (tChant <= 0) {
-    tChant = rnd(2.5, 7);
-    if (ETAT_SAISON.neige < 0.5) {
+    // les oiseaux chantent surtout à l’aube, se taisent la nuit et pendant les tempêtes
+    const aube = lisse(4.8, 6, S.heure) * (1 - lisse(8.5, 10, S.heure));
+    tChant = rnd(2.5, 7) / (1 + 1.6 * aube);
+    if (TEMPETE.k > 0.4) { /* silence */ }
+    else if (nuit) {
+      if (Math.random() < 0.3) { bip(390, 0.22, 'sine', 0.03, 0, 350); bip(350, 0.5, 'sine', 0.035, 0.34, 310); } // chouette
+      else if (!hiver && ETAT_SAISON.feuilles > 0.5) for (let i = 0; i < 5; i++) bip(4300, 0.03, 'sine', 0.008, i * 0.07); // grillons
+    } else if (!hiver) {
       const f0 = rnd(2200, 3800), n = 2 + ((Math.random() * 3) | 0);
       for (let i = 0; i < n; i++) bip(f0 * rnd(0.9, 1.15), 0.07, 'sine', 0.03, i * 0.11, f0 * rnd(1.1, 1.4));
     } else if (Math.random() < 0.4) { bip(420, 0.25, 'sawtooth', 0.025, 0, 300); bip(420, 0.25, 'sawtooth', 0.025, 0.35, 300); }
+  }
+  tBrame -= dt;
+  if (tBrame <= 0) {
+    tBrame = rnd(35, 75);
+    // en automne, au crépuscule et la nuit, les cerfs brament
+    if ((ETAT_SAISON.feuillesSol || 0) > 0.5 && (NUIT.c > 0.25 || nuit) && TEMPETE.k < 0.3 && animaux.some((a) => a.type === 'cerf' && !a.chef && vivant(a))) brame();
   }
   tCrapaud -= dt;
   if (tCrapaud <= 0) {
@@ -3553,7 +3688,7 @@ function retirerAnimal(a) {
 function teinte(a, rouge) { a.mats.forEach((m) => m.emissive.setHex(rouge ? 0x8a1010 : a.gel > 0 ? 0x2a6aaa : m.userData.base)); }
 
 /* ================= Joueur ================= */
-const P = { x: 0, z: 12, y: 0, vy: 0, yaw: 0, pitch: -0.05, pv: 100, endu: 100, essouffle: false, tDegat: 99, auSol: true, enMouvement: false, court: false, pas: 0 };
+const P = { x: 0, z: 12, y: 0, vy: 0, yaw: 0, pitch: -0.05, pv: 100, endu: 100, essouffle: false, tDegat: 99, auSol: true, enMouvement: false, court: false, pas: 0, vx: 0, vz: 0, souffle: 0, bruitSol: 1 };
 const auVillage = () => Math.hypot(P.x, P.z) < 30 || (S.maison && S.maison.etape >= 6 && Math.hypot(P.x - PARCELLE.x, P.z - PARCELLE.z) < 13);
 
 /* ----- Arme en main ----- */
@@ -3705,14 +3840,18 @@ function distanceSol(o, d, max) {
   }
   return tEau;
 }
-function effrayer(rayon = 80) {
+/* retard = true (armes à feu) : la détonation met un instant à arriver (340 m/s), l’animal sursaute, lève la tête,
+   puis détale. La balle, plus rapide que la réaction, arrive avant sur une cible immobile. */
+function effrayer(rayon = 80, retard = false) {
   const auV = auVillage();
   for (const a of animaux) {
     if (!vivant(a) || a.etat === 'charge') continue;
     const d = Math.hypot(a.x - P.x, a.z - P.z);
-    if (a.sp.comportement === 'attaque') {
-      if (d < rayon * 0.7 && !auV) lancerCharge(a);
-    } else if (d < rayon) fuir(a, rnd(4, 7));
+    const attaque = a.sp.comportement === 'attaque';
+    if (d >= (attaque ? rayon * 0.7 : rayon)) continue;
+    if (retard) { if (!(a.sursaut > 0) && a.etat !== 'fuite') a.sursaut = d / 340 + 0.3; }
+    else if (attaque) { if (!auV) lancerCharge(a); }
+    else fuir(a, rnd(4, 7));
   }
 }
 let energie = 100, tEnergie = 0, tirAppuye = false;
@@ -3799,6 +3938,7 @@ function majProjectiles(dt) {
     if (pr.colle > 0) { pr.colle -= dt; if (pr.colle <= 0) retirerProjectile(i); continue; }
     pr.vie -= dt; if (pr.vie <= 0) { retirerProjectile(i); continue; }
     pr.vel.y -= 9.8 * pr.w.gravite * dt;
+    if (pr.w.proj === 'fleche' || pr.w.proj === 'carreau' || pr.w.proj === 'filet') { pr.vel.x += VENT.ux * VENT.force * DERIVE_TRAIT * dt; pr.vel.z += VENT.uz * VENT.force * DERIVE_TRAIT * dt; }
     const pas = pr.vel.length() * dt, dir = vTmp.copy(pr.vel).normalize();
     if (!cibles) cibles = ciblesTir();
     if (pr.w.proj === 'filet') {
@@ -3813,6 +3953,56 @@ function majProjectiles(dt) {
     pr.g.lookAt(vTmp2.copy(pr.pos).add(pr.vel));
     if (pr.w.proj === 'filet') { const s = Math.min(2.2, pr.g.scale.x + dt * 3); pr.g.scale.setScalar(s); pr.g.rotation.z += dt * 6; }
   }
+}
+/* ----- Balles des armes à feu : elles volent vraiment (temps de vol, chute, dérive au vent) ----- */
+const balles = [];
+function majBalles(dt) {
+  if (!balles.length) return;
+  const cibles = ciblesTir(), coups = new Map();
+  const ax = VENT.ux * VENT.force * DERIVE_BALLE * dt, az = VENT.uz * VENT.force * DERIVE_BALLE * dt;
+  for (let i = balles.length - 1; i >= 0; i--) {
+    const b = balles[i];
+    b.vel.y -= 9.8 * dt; b.vel.x += ax; b.vel.z += az;
+    const pas = Math.min(b.vel.length() * dt, b.reste), dir = vTmp.copy(b.vel).normalize();
+    const r = lancerRayon(b.pos, dir, pas, cibles);
+    if (r) {
+      if (r.a && vivant(r.a)) {
+        const c = coups.get(r.a) || { d: 0, tete: false };
+        c.d += b.w.degats * (r.tete ? 2 : 1); c.tete = c.tete || r.tete;
+        coups.set(r.a, c);
+        impact(r.point, 0xffe066);
+      } else impact(r.point, r.sol && ETAT_SAISON.neige > 0.5 ? 0xffffff : 0xcdbb98);
+      balles.splice(i, 1); continue;
+    }
+    b.pos.addScaledVector(dir, pas); b.reste -= pas;
+    if (b.reste <= 0.01) balles.splice(i, 1);
+  }
+  if (!coups.size) return;
+  let tue = false;
+  coups.forEach((c, a) => { if (blesser(a, c.d, c.tete)) tue = true; });
+  toucheT = 0.18;
+  $('viseur').className = tue ? 'tue' : 'touche';
+  sonTouche(tue);
+}
+/* Aide à la visée (clic droit) : distance du point visé et, si besoin, de quel côté décaler le tir. */
+let tInfoVisee = 0, conseilVisee = false;
+function majInfoVisee(dt) {
+  const w = ARMES[S.arme], bal = BALISTIQUE[S.arme];
+  const v = bal ? bal.v : w.type === 'projectile' ? w.vitesse : 0;
+  if (viseT < 0.7 || !v || P.interieur) { txt('visee-info', ''); tInfoVisee = 0; return; }
+  tInfoVisee -= dt; if (tInfoVisee > 0) return;
+  tInfoVisee = 0.2;
+  camera.updateMatrixWorld();
+  const r = lancerRayon(camera.getWorldPosition(v1), camera.getWorldDirection(v2), Math.min(w.portee, 260), ciblesTir());
+  if (!r) { txt('visee-info', ''); return; }
+  const dd = r.t, tv = dd / v;
+  const chute = bal ? 4.9 * dd * (dd - bal.zero) / (v * v) : 4.9 * w.gravite * tv * tv;
+  const kd = bal ? DERIVE_BALLE : (w.proj === 'fleche' || w.proj === 'carreau' || w.proj === 'filet') ? DERIVE_TRAIT : 0;
+  const derive = 0.5 * kd * VENT.force * (VENT.ux * Math.cos(P.yaw) - VENT.uz * Math.sin(P.yaw)) * tv * tv; // > 0 : le vent pousse le tir vers la droite
+  const fl = (x, s) => x > 0.4 ? s + s : x > 0.08 ? s : '';
+  const aide = fl(derive, '←') + fl(chute, '↑') + fl(-derive, '→');
+  txt('visee-info', `${Math.round(dd)} m${aide ? ' ' + aide : ''}`);
+  if (aide && !conseilVisee) { conseilVisee = true; message('🎯 Les flèches sous le viseur te disent où décaler ta visée : ↑ plus haut (le tir retombe avec la distance), ← → contre le vent.', 'info'); }
 }
 function impactProjectile(pr, r) {
   const w = pr.w, a = r.a && vivant(r.a) ? r.a : null;
@@ -3891,7 +4081,8 @@ function tirer() {
     P.pitch = Math.min(1.45, P.pitch + (id === 'fusil' ? 0.035 : id === 'lunette' ? 0.03 : 0.012));
   } else if (id === 'eclair') P.pitch = Math.min(1.45, P.pitch + 0.03);
   sonArme(id);
-  effrayer(w.silencieux ? 7 : (w.bruit || 80));
+  effrayer(w.silencieux ? 7 : (w.bruit || 80), armeAFeu);
+  if (armeAFeu) envol();
   camera.updateMatrixWorld();
   if (armeAFeu) ejecterDouille();
   const origine = camera.getWorldPosition(v1);
@@ -3933,25 +4124,13 @@ function tirer() {
     if (n) { toucheT = 0.2; $('viseur').className = tueUn ? 'tue' : 'touche'; sonTouche(tueUn); if (n > 1) message(`⚡ L’éclair a frappé ${n} animaux !`, 'info'); }
     return;
   }
-  const coups = new Map();
+  // armes à feu : chaque balle (ou plomb) part pour de bon, voir majBalles. La hausse règle la visée à bal.zero mètres.
+  const bal = BALISTIQUE[id], hausse = 9.8 * bal.zero / (2 * bal.v * bal.v);
   for (let i = 0; i < w.plombs; i++) {
-    const dir = v5.copy(v2).addScaledVector(droite, (Math.random() * 2 - 1) * disp).addScaledVector(haut, (Math.random() * 2 - 1) * disp).normalize();
-    const r = lancerRayon(origine, dir, w.portee, cibles);
-    if (!r) continue;
-    if (r.a && vivant(r.a)) {
-      const c = coups.get(r.a) || { d: 0, tete: false };
-      c.d += w.degats * (r.tete ? 2 : 1); c.tete = c.tete || r.tete;
-      coups.set(r.a, c);
-      impact(r.point, 0xffe066);
-    } else impact(r.point, r.sol && ETAT_SAISON.neige > 0.5 ? 0xffffff : 0xcdbb98);
+    const dir = v5.copy(v2).addScaledVector(droite, (Math.random() * 2 - 1) * disp).addScaledVector(haut, (Math.random() * 2 - 1) * disp + hausse).normalize();
+    balles.push({ w, pos: origine.clone(), vel: dir.clone().multiplyScalar(bal.v), reste: w.portee });
   }
-  let tue = false;
-  coups.forEach((c, a) => { if (blesser(a, c.d, c.tete)) tue = true; });
-  if (coups.size) {
-    toucheT = 0.18;
-    $('viseur').className = tue ? 'tue' : 'touche';
-    sonTouche(tue);
-  }
+  majBalles(0.012); // premier bond tout de suite : à bout portant, la touche est immédiate
 }
 function blesser(a, d, tete) {
   if (!vivant(a)) return false;
@@ -4342,18 +4521,41 @@ function majJoueur(dt) {
   const glace = ETAT_SAISON.neige > 0.6;
   if (!glace && presDuLac(P.x, P.z) && sol(P.x, P.z) < LAC.niveau) vit *= 0.55;
   if (!P.interieur) vit *= 1 - profNeige * 0.6 - TEMPETE.k * 0.12;
+  const rx = Math.cos(P.yaw), rz = -Math.sin(P.yaw);
+  let cvx = 0, cvz = 0;
   if (bouge) {
-    const fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw), rx = Math.cos(P.yaw), rz = -Math.sin(P.yaw);
+    const fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw);
     let mx = fx * av + rx * la, mz = fz * av + rz * la;
     const l = Math.hypot(mx, mz), amp = Math.min(1, Math.hypot(av, la)); mx *= amp / l; mz *= amp / l; // amp < 1 : stick à moitié poussé
-    const nx = P.x + mx * vit * dt, nz = P.z + mz * vit * dt;
-    if (glace || !presDuLac(nx, P.z) || sol(nx, P.z) > LAC.niveau - 0.45) P.x = nx;
-    if (glace || !presDuLac(P.x, nz) || sol(P.x, nz) > LAC.niveau - 0.45) P.z = nz;
-    P.pas += dt * vit;
-    const nPas = Math.floor(P.pas / 1.7);
-    if (nPas !== P.dernierPas) { P.dernierPas = nPas; if (P.auSol) { const n = ETAT_SAISON.neige > 0.5; bruit(0.07, n ? 3200 : P.court ? 1400 : 900, n ? 0.05 : 0.04); } }
+    cvx = mx * vit; cvz = mz * vit;
   }
-  P.enMouvement = bouge;
+  // inertie : on ne démarre ni ne s’arrête d’un coup (et on glisse sur le lac gelé)
+  const dansLac = presDuLac(P.x, P.z) && sol(P.x, P.z) < LAC.niveau;
+  const prise = Math.min(1, dt * (glace && dansLac && !P.interieur ? 2.2 : bouge ? 11 : 9));
+  P.vx += (cvx - P.vx) * prise; P.vz += (cvz - P.vz) * prise;
+  const vH = Math.hypot(P.vx, P.vz);
+  if (vH > 0.08) {
+    const nx = P.x + P.vx * dt, nz = P.z + P.vz * dt;
+    if (glace || !presDuLac(nx, P.z) || sol(nx, P.z) > LAC.niveau - 0.45) P.x = nx; else P.vx = 0;
+    if (glace || !presDuLac(P.x, nz) || sol(P.x, nz) > LAC.niveau - 0.45) P.z = nz; else P.vz = 0;
+    P.pas += dt * vH;
+    const nPas = Math.floor(P.pas / 1.7);
+    if (nPas !== P.dernierPas) {
+      P.dernierPas = nPas;
+      if (P.auSol) {
+        // bruit de pas selon le sol ; P.bruitSol dit aussi aux animaux si ce sol est bruyant
+        const neige = ETAT_SAISON.neige > 0.5;
+        if (P.interieur) { P.bruitSol = 1; bruit(0.05, 520, 0.07); bip(105, 0.05, 'sine', 0.05, 0, 70); }                      // plancher
+        else if (dansLac && !glace) { P.bruitSol = 1.2; bruit(0.18, 2600, 0.07); bruit(0.1, 900, 0.05, 0.05); }               // eau
+        else if (neige) { P.bruitSol = 0.9; bruit(0.1, 3200, 0.05); bruit(0.05, 700, 0.03, 0.03); }                           // neige qui crisse
+        else if (Math.hypot(P.x, P.z) < 30 || distChemin(P.x, P.z) < 2.6) { P.bruitSol = 1; bruit(0.05, 2300, 0.045); }       // chemin de terre et gravier
+        else if ((ETAT_SAISON.feuillesSol || 0) > 0.5) { P.bruitSol = 1.15; bruit(0.07, 1000, 0.035); bruit(0.11, 4200, 0.03, 0.01); } // feuilles mortes
+        else { P.bruitSol = 0.9; bruit(0.07, P.court ? 1400 : 900, 0.04); }                                                  // herbe
+        if (neige && !P.interieur) { const cote = nPas & 1 ? 0.13 : -0.13; poserTrace(P.x + rx * cote, P.z + rz * cote, Math.atan2(P.vx, P.vz), 0.075, 0.15); }
+      }
+    }
+  } else { P.vx = 0; P.vz = 0; }
+  P.enMouvement = bouge || vH > 1;
   repousser(P, 0.4);
   for (const b of BOITES) {
     const dx = P.x - b.x, dz = P.z - b.z;
@@ -4373,7 +4575,11 @@ function majJoueur(dt) {
   if (P.tDegat > 4) P.pv = Math.min(100, P.pv + 6 * dt);
   const bob = P.enMouvement && P.auSol ? Math.sin(P.pas * 1.6) * 0.05 : 0;
   camera.position.set(P.x, P.y + 1.7 + bob, P.z);
-  camera.rotation.set(P.pitch, P.yaw, 0);
+  // respiration : la visée flotte doucement, bien plus quand on est essoufflé ou qu’on marche
+  const fatigue = 1 - P.endu / 100;
+  const ampS = (0.0007 + 0.0055 * fatigue * fatigue + (P.enMouvement ? 0.0012 : 0)) * (0.25 + 0.75 * viseT);
+  P.souffle += dt * (1.1 + fatigue * 2.2);
+  camera.rotation.set(P.pitch + Math.sin(P.souffle * 2) * ampS, P.yaw + Math.sin(P.souffle * 1.3 + 1) * ampS * 0.6, 0);
 }
 function majArme(dt) {
   const w = ARMES[S.arme], v = VUE[S.arme];
@@ -4400,6 +4606,7 @@ function majArme(dt) {
   flashT = Math.max(0, flashT - dt);
   flamme.visible = flashT > 0;
   lumTir.intensity = flashT > 0 ? 3 : 0;
+  majInfoVisee(dt);
   const lunette = S.arme === 'lunette' && viseT > 0.85;
   armeGroupe.visible = !lunette;
   $('lunette').hidden = !lunette;
@@ -4434,14 +4641,34 @@ function majAnimal(a, dt, actif) {
   const dx = P.x - a.x, dz = P.z - a.z, d = Math.hypot(dx, dz);
   const joueurAuVillage = auVillage();
   if (actif && a.etat !== 'charge') {
-    const bruitPas = P.court ? 1.7 : (P.enMouvement ? 1 : 0.55);
-    const seuil = sp.detect * CHAUSSURES[S.chaussures].discretion * bruitPas * (1 - 0.5 * TEMPETE.k) * (a.type === 'loup' ? (torcheOn ? 1.4 : 1) : 1 - 0.25 * NUIT.n);
+    // ouïe : l’allure du joueur et le sol sous ses pieds (feuilles mortes, eau, neige fraîche…)
+    const bruitPas = P.court ? 1.7 * P.bruitSol : (P.enMouvement ? P.bruitSol : 0.55);
+    // odorat : le vent porte l’odeur du joueur vers l’animal (porte > 0) ou l’en éloigne (porte < 0)
+    const porte = d > 0.5 ? -(dx * VENT.ux + dz * VENT.uz) / d * Math.min(1, VENT.force / 3.5) : 0;
+    const odorat = 1 + (porte > 0 ? 0.3 : 0.35) * porte;
+    // vue : un animal voit mal dans son dos, et moins bien encore le museau dans l’herbe
+    const deDos = d > 0.5 && (Math.sin(a.yaw) * dx + Math.cos(a.yaw) * dz) / d < -0.3;
+    const broute = a.vit === 0 && a.etat === 'errer' && !a.aguets && Math.sin(temps * 0.35 + a.seed) > -0.35;
+    const vue = (deDos ? 0.8 : 1) * (broute ? 0.9 : 1);
+    const base = sp.detect * CHAUSSURES[S.chaussures].discretion * bruitPas * (1 - 0.5 * TEMPETE.k) * (a.type === 'loup' ? (torcheOn ? 1.4 : 1) : 1 - 0.25 * NUIT.n);
+    const seuil = base * odorat * vue;
     if (d < seuil) {
       if (sp.comportement === 'attaque') { if (!joueurAuVillage) lancerCharge(a); }
-      else if (a.etat !== 'fuite') fuir(a, rnd(4, 7));
+      else if (a.etat !== 'fuite') {
+        fuir(a, rnd(4, 7));
+        if (porte > 0.4 && d > base * vue && temps - tMsgOdeur > 50) { tMsgOdeur = temps; message(`💨 ${sp.nom} t’a senti : le vent lui porte ton odeur. Approche face au vent !`, 'info'); }
+      }
     } else if (sp.comportement !== 'attaque' && a.etat === 'errer' && d < seuil * 1.8) {
       a.aguets = true; a.vit = 0; a.t = Math.max(a.t, 1.5);
     } else a.aguets = false;
+  }
+  if (a.sursaut > 0) {
+    // un coup de feu vient de claquer : tête haute, immobile, puis la fuite (ou la charge)
+    a.sursaut -= dt;
+    if (a.etat === 'fuite' || a.etat === 'charge') a.sursaut = 0;
+    else if (a.sursaut > 0) { a.aguets = true; a.vit = 0; a.t = Math.max(a.t, a.sursaut); }
+    else if (sp.comportement !== 'attaque') fuir(a, rnd(4, 7));
+    else if (!joueurAuVillage) lancerCharge(a);
   }
   if (a.chef) {
     const c = a.chef;
@@ -4498,6 +4725,15 @@ function majAnimal(a, dt, actif) {
   const amp = Math.min(a.vit / 3, 1) * 0.6;
   const galop = a.type === 'lapin' || a.vit > sp.marche * 1.6;
   const k = galop && a.type !== 'lapin' ? 1.3 : 1;
+  if (a.vit > 0 && d < 95) {
+    // empreintes : une à chaque foulée, à gauche puis à droite
+    a.dTrace += a.vit * dt;
+    if (a.dTrace > (galop ? 2.2 : 1.3) * (0.5 + o.L * 0.5)) {
+      a.dTrace = 0; a.cTrace = -a.cTrace;
+      const ec = a.cTrace * o.W * 0.28, tp = 0.07 + o.W * 0.13;
+      poserTrace(a.x + Math.cos(a.yaw) * ec, a.z - Math.sin(a.yaw) * ec, a.yaw, tp, tp * 1.5);
+    }
+  }
   for (const p of a.pattes) {
     const ph = galop ? (p.avant ? 0 : Math.PI) + (p.cote > 0 ? 0.35 : 0) : (p.avant === (p.cote > 0) ? 0 : Math.PI);
     const t2 = a.marche + ph;
@@ -4526,7 +4762,7 @@ function majAnimal(a, dt, actif) {
   a.tete.rotation.x += (cx2 - a.tete.rotation.x) * lerpT;
   a.tete.rotation.y += (cy2 - a.tete.rotation.y) * lerpT;
 }
-let tRepop = 0;
+let tRepop = 0, tMsgOdeur = -99;
 function repeupler(dt) {
   tRepop -= dt;
   if (tRepop > 0) return;
@@ -4550,6 +4786,12 @@ function majHud(dt) {
   txt('h-tableau', pluriel(S.tableau, 'animal vendu', 'animaux vendus'));
   txt('h-heure', `${NUIT.n > 0.6 ? '🌙' : NUIT.c > 0.4 ? '🌅' : '☀️'} ${heureTexte()}${torcheOn ? ' · 🔦' : ''}`);
   { const e = ETAT_SAISON, A = SAISONS[e.a], B = SAISONS[e.b]; txt('h-saison', (e.f > 0.02 ? `${A.emoji} ${A.nom} → ${B.emoji} ${B.nom}` : `${A.emoji} ${A.nom}`) + (TEMPETE.k > 0.3 ? ' · 🌨️ Tempête' : '')); }
+  {
+    // vent : la flèche montre vers où il souffle par rapport au regard ; de face, il emporte ton odeur derrière toi
+    const cap = Math.atan2(-Math.sin(P.yaw), -Math.cos(P.yaw)), rel = ecartAngle(Math.atan2(VENT.ux, VENT.uz), cap), c = Math.cos(rel);
+    const t = `rotate(${rel.toFixed(1)}rad)`; if (cache.ventF !== t) { cache.ventF = t; $('h-vent-f').style.transform = t; }
+    txt('h-vent', `Vent ${VENT.force < 1.5 ? 'faible' : VENT.force < 3.8 ? 'modéré' : 'fort'}${VENT.force < 0.9 ? '' : c > 0.5 ? ', dans le dos' : c < -0.5 ? ', de face' : ', de côté'}`);
+  }
   attr('h-vie', 'width', `${Math.max(0, P.pv)}%`);
   attr('h-vie', 'background', P.pv < 35 ? 'var(--danger)' : 'var(--ok)');
   txt('h-vie-n', String(Math.max(0, Math.ceil(P.pv))));
@@ -4670,8 +4912,14 @@ function boucle() {
   { const d = NUIT.jour > 0.35 ? DIR_SOLEIL : DIR_LUNE, dy = Math.max(d.y, 0.25); soleil.position.set(cx + d.x * 140, dy * 140, cz + d.z * 140); soleil.target.position.set(cx, 0, cz); }
   lumFeu.intensity = (1.2 + Math.sin(temps * 13) * 0.2 + Math.sin(temps * 7.3) * 0.15) * (1 + 1.3 * NUIT.n);
   const fl = window.__flammes; fl[0].scale.y = 1 + Math.sin(temps * 11) * 0.12; fl[1].scale.y = 1 + Math.sin(temps * 15 + 1) * 0.15;
-  window.__drapeau.rotation.y = Math.sin(temps * 2) * 0.15;
-  for (const n of nuages) { n.position.x += dt * 1.5; if (n.position.x > 420) n.position.x = -420; }
+  majVent(dt);
+  window.__drapeau.rotation.y = VENT.dir - Math.PI / 2 + Math.sin(temps * (1.5 + VENT.force * 0.35)) * 0.15; // le drapeau du village sert de girouette
+  { const vn = dt * (0.5 + VENT.force * 0.4);
+    for (const n of nuages) {
+      n.position.x += VENT.ux * vn; n.position.z += VENT.uz * vn;
+      if (n.position.x > 420) n.position.x = -420; else if (n.position.x < -420) n.position.x = 420;
+      if (n.position.z > 420) n.position.z = -420; else if (n.position.z < -420) n.position.z = 420;
+    } }
   ciel.position.copy(camera.position);
   for (const o of oiseaux) {
     const an = o.ph + temps * o.v / o.r;
@@ -4683,7 +4931,8 @@ function boucle() {
   for (const f of fumees) {
     f.t += dt; if (f.t > 4.5) f.t -= 4.5;
     const k = f.t / 4.5, sc = 0.6 + k * 2.6;
-    f.s.position.set(f.base.x + k * 2.4 + Math.sin(temps + f.t) * 0.2, f.base.y + k * 5.5, f.base.z + k * 0.9);
+    const couche2 = k * k * (0.6 + VENT.force * 0.9); // la fumée se couche dans le vent
+    f.s.position.set(f.base.x + VENT.ux * couche2 + Math.sin(temps + f.t) * 0.2, f.base.y + k * 5.5 / (1 + VENT.force * 0.06), f.base.z + VENT.uz * couche2);
     f.s.scale.set(sc, sc, 1);
     f.s.material.opacity = 0.5 * (1 - k) * Math.min(1, k * 6);
   }
@@ -4691,8 +4940,8 @@ function boucle() {
   majNuit(dt);
   majMeteo(dt);
   majSysteme(sysA, dt); majSysteme(sysB, dt);
-  majProjectiles(dt); majEffets(dt);
-  U_VENT.value = temps;
+  majProjectiles(dt); majBalles(dt); majEffets(dt); majEnvol(dt);
+  U_VENT.value += dt * (0.55 + VENT.force * 0.18); // la végétation s’agite plus vite quand le vent forcit
   majDetails(dt);
   for (const i of impacts) if (i.t > 0) { i.t -= dt; i.mesh.scale.setScalar(1 + (0.45 - i.t) * 3); i.mesh.material.opacity = Math.max(0, i.t / 0.45); if (i.t <= 0) i.mesh.visible = false; }
   if (mode !== 'titre') { majHud(dt); if ((nImage++ & 1) === 0) dessinerCarte(); }
